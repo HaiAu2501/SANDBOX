@@ -21,6 +21,8 @@ on:
         options:
           - ea_bot
           - ea_top
+          - ws_bot
+          - ws_top
       model:
         description: "LLM model to use"
         type: choice
