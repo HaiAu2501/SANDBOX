@@ -13,6 +13,7 @@ on:
           - aco_cvrp
           - aco_lvrp
           - aco_ovrp
+          - const_tsp
       framework:
         description: "Framework to use"
         type: choice
