@@ -29,6 +29,14 @@ on:
         options:
           - gpt-4o-mini
           - gpt-5-nano
+      seed_dir:
+        description: "Seed directory (optional)"
+        type: choice
+        required: true
+        default: seeds/aco_tsp
+        options:
+          - seeds/aco_tsp
+          - seeds/const_tsp
 
 jobs:
   # ============================================================
@@ -63,7 +71,8 @@ jobs:
           python main.py \
             llm.model=${{ github.event.inputs.model }} \
             problem=${{ github.event.inputs.problem }} \
-            framework=${{ github.event.inputs.framework }}
+            framework=${{ github.event.inputs.framework }} \
+            framework.hyperparams.seed_dir=${{ github.event.inputs.seed_dir }}
 
       - name: UPLOAD RESULTS
         if: always()
