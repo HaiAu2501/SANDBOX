@@ -1,4 +1,4 @@
-name: SOLVE OPTIMAL (nco_tsp_node)
+name: SOLVE OPTIMAL [NCO]
 
 on:
   workflow_dispatch:
