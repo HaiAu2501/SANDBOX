@@ -1,0 +1,55 @@
+name: SOLVE OPTIMAL (nco_tsp_node)
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "elkai LKH runs per instance"
+        type: string
+        required: true
+        default: "10"
+
+jobs:
+  solve:
+    name: SOLVE | ${{ matrix.split }} | ${{ matrix.dist }} | n=${{ matrix.n }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    strategy:
+      fail-fast: false
+      matrix:
+        split: [train, test]
+        dist: [unif, clus, diag, barb]
+        n: [100, 200, 500]
+        exclude:
+          # Train set only has n=100
+          - split: train
+            n: 200
+          - split: train
+            n: 500
+
+    steps:
+      - name: CHECKOUT PRIVATE REPO
+        uses: actions/checkout@v4
+        with:
+          repository: HaiAu2501/BRIDGE
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+
+      - name: SET UP PYTHON
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: INSTALL DEPENDENCIES
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install elkai
+
+      - name: SOLVE OPTIMAL (elkai)
+        working-directory: problems/nco_tsp_node
+        run: |
+          python solve_optimal.py \
+            --file data/tsp_${{ matrix.dist }}_${{ matrix.split }}_${{ matrix.n }}.npy \
+            --runs ${{ github.event.inputs.runs }}
