@@ -1,0 +1,139 @@
+name: RUN EXPERIMENT 07
+
+on:
+  workflow_dispatch:
+    inputs:
+      problem:
+        description: "Problem name"
+        type: choice
+        required: true
+        default: nco_tsp_node
+        options:
+          - nco_tsp_node
+          - nco_tsp_edge
+      framework:
+        description: "Framework to use"
+        type: choice
+        required: true
+        default: wb_ea_bot
+        options:
+          - wb_ea_bot
+          - wb_ea_top
+      dist:
+        description: "Distribution to use for search"
+        type: choice
+        required: true
+        default: unif
+        options:
+          - unif
+          - clus
+          - diag
+          - barb
+      model:
+        description: "LLM model to use"
+        type: choice
+        required: true
+        default: gpt-4o-mini
+        options:
+          - gpt-4o-mini
+          - gpt-5-nano
+
+jobs:
+  # ============================================================
+  # Job 1: Checkout private repo → Run AHD experiment
+  # ============================================================
+  run_experiment:
+    name: RUN | ${{ github.event.inputs.problem }} | ${{ github.event.inputs.framework }} | ${{ github.event.inputs.dist }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: CHECKOUT PRIVATE REPO
+        uses: actions/checkout@v4
+        with:
+          repository: HaiAu2501/BRIDGE
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+
+      - name: SET UP PYTHON
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: INSTALL DEPENDENCIES
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: RUN EXPERIMENT
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python main.py \
+            llm.model=${{ github.event.inputs.model }} \
+            problem=${{ github.event.inputs.problem }} \
+            framework=${{ github.event.inputs.framework }} \
+            problem.dist_code=${{ github.event.inputs.dist }}
+
+      - name: UPLOAD RESULTS
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ github.event.inputs.problem }}-${{ github.event.inputs.framework }}-${{ github.event.inputs.dist }}-${{ github.run_id }}
+          path: results/
+          retention-days: 30
+
+  # ============================================================
+  # Job 2: Evaluate func_best.py on test sets (matrix over sizes)
+  # ============================================================
+  evaluate:
+    name: EVAL | n=${{ matrix.n }}
+    needs: run_experiment
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        n: [100, 200, 500]
+
+    steps:
+      - name: CHECKOUT PRIVATE REPO (BRIDGE)
+        uses: actions/checkout@v4
+        with:
+          repository: HaiAu2501/BRIDGE
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+
+      - name: SET UP PYTHON
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: INSTALL DEPENDENCIES
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: DOWNLOAD RESULTS
+        uses: actions/download-artifact@v4
+        with:
+          name: results-${{ github.event.inputs.problem }}-${{ github.event.inputs.framework }}-${{ github.event.inputs.dist }}-${{ github.run_id }}
+          path: results/
+
+      - name: FIND AND COPY func_best.py
+        run: |
+          PROBLEM=${{ github.event.inputs.problem }}
+          BEST=$(find results/${PROBLEM}/ -name "func_best.py" -type f | head -1)
+          if [ -z "$BEST" ]; then
+            echo "ERROR: func_best.py not found in results/${PROBLEM}/"
+            find results/ -name "*.py" -type f
+            exit 1
+          fi
+          echo "Found: $BEST"
+          cp "$BEST" problems/${PROBLEM}/func_best.py
+          echo "--- func_best.py ---"
+          cat problems/${PROBLEM}/func_best.py
+
+      - name: RUN TEST (n=${{ matrix.n }})
+        working-directory: problems/${{ github.event.inputs.problem }}
+        run: |
+          python test.py --n ${{ matrix.n }} --dist ${{ github.event.inputs.dist }} --module func_best.py
