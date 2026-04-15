@@ -64,6 +64,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: DOWNLOAD HEATMAPS (TRAIN)
+        env:
+          GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+        run: |
+          if [ "${{ github.event.inputs.problem }}" = "nco_tsp_edge" ]; then
+            mkdir -p problems/nco_tsp_edge/heatmaps
+            DIST=${{ github.event.inputs.dist }}
+            gh release download heatmaps-v1 \
+              --repo HaiAu2501/BRIDGE \
+              --pattern "tsp_${DIST}_train_*.npy" \
+              --dir problems/nco_tsp_edge/heatmaps
+            ls -lh problems/nco_tsp_edge/heatmaps/
+          else
+            echo "Not nco_tsp_edge, skipping heatmap download."
+          fi
+
       - name: RUN EXPERIMENT
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -132,6 +148,23 @@ jobs:
           cp "$BEST" problems/${PROBLEM}/func_best.py
           echo "--- func_best.py ---"
           cat problems/${PROBLEM}/func_best.py
+
+      - name: DOWNLOAD HEATMAPS (TEST)
+        env:
+          GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+        run: |
+          if [ "${{ github.event.inputs.problem }}" = "nco_tsp_edge" ]; then
+            mkdir -p problems/nco_tsp_edge/heatmaps
+            DIST=${{ github.event.inputs.dist }}
+            N=${{ matrix.n }}
+            gh release download heatmaps-v1 \
+              --repo HaiAu2501/BRIDGE \
+              --pattern "tsp_${DIST}_test_${N}.npy" \
+              --dir problems/nco_tsp_edge/heatmaps
+            ls -lh problems/nco_tsp_edge/heatmaps/
+          else
+            echo "Not nco_tsp_edge, skipping heatmap download."
+          fi
 
       - name: RUN TEST (n=${{ matrix.n }})
         working-directory: problems/${{ github.event.inputs.problem }}
