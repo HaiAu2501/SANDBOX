@@ -1,0 +1,165 @@
+name: RUN EXPERIMENT 8
+
+on:
+  workflow_dispatch:
+    inputs:
+      problem:
+        description: "Problem name"
+        type: choice
+        required: true
+        default: nco_tsp_node
+        options:
+          - nco_tsp_node
+          - nco_tsp_edge
+      model:
+        description: "LLM model to use"
+        type: choice
+        required: true
+        default: gpt-4o-mini
+        options:
+          - gpt-4o-mini
+          - gpt-5-nano
+
+jobs:
+  # ============================================================
+  # Job 1: Run OMDT search (covers all 4 distributions at once)
+  # ============================================================
+  run_experiment:
+    name: RUN | ${{ github.event.inputs.problem }} | omdt_wb_ea
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: CHECKOUT PRIVATE REPO
+        uses: actions/checkout@v4
+        with:
+          repository: HaiAu2501/BRIDGE
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+
+      - name: SET UP PYTHON
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: INSTALL DEPENDENCIES
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # OMDT evaluates on ALL 4 distributions during search,
+      # so we need ALL train heatmaps upfront (edge only).
+      - name: DOWNLOAD HEATMAPS (ALL TRAIN DISTS)
+        if: github.event.inputs.problem == 'nco_tsp_edge'
+        env:
+          GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+        run: |
+          mkdir -p problems/nco_tsp_edge/heatmaps
+          for DIST in unif clus diag barb; do
+            gh release download heatmaps-v1 \
+              --repo HaiAu2501/BRIDGE \
+              --pattern "tsp_${DIST}_train_*.npy" \
+              --dir problems/nco_tsp_edge/heatmaps
+          done
+          echo "--- downloaded train heatmaps ---"
+          ls -lh problems/nco_tsp_edge/heatmaps/
+
+      - name: RUN OMDT EXPERIMENT
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python main.py \
+            llm.model=${{ github.event.inputs.model }} \
+            problem=${{ github.event.inputs.problem }} \
+            framework=omdt_wb_ea
+
+      - name: UPLOAD RESULTS
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ github.event.inputs.problem }}-omdt-${{ github.run_id }}
+          path: results/
+          retention-days: 30
+
+  # ============================================================
+  # Job 2: Evaluate func_best_on_{dist}.py on test sets
+  #         Matrix: n × dist (all 4 dists × 3 sizes = 12 jobs)
+  # ============================================================
+  evaluate:
+    name: EVAL | ${{ matrix.dist }} | n=${{ matrix.n }}
+    needs: run_experiment
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        n: [100, 200, 500]
+        dist: [unif, clus, diag, barb]
+
+    steps:
+      - name: CHECKOUT PRIVATE REPO
+        uses: actions/checkout@v4
+        with:
+          repository: HaiAu2501/BRIDGE
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+
+      - name: SET UP PYTHON
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: INSTALL DEPENDENCIES
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: DOWNLOAD RESULTS
+        uses: actions/download-artifact@v4
+        with:
+          name: results-${{ github.event.inputs.problem }}-omdt-${{ github.run_id }}
+          path: results/
+
+      - name: FIND AND COPY func_best_on_${{ matrix.dist }}.py
+        run: |
+          PROBLEM=${{ github.event.inputs.problem }}
+          DIST=${{ matrix.dist }}
+
+          # OMDT outputs func_best_on_{dist}.py (best of generalist vs specialist)
+          BEST=$(find results/${PROBLEM}/ -name "func_best_on_${DIST}.py" -type f | head -1)
+
+          if [ -z "$BEST" ]; then
+            # Fallback: try the generalist-specific file
+            BEST=$(find results/${PROBLEM}/ -name "func_best_generalist_${DIST}.py" -type f | head -1)
+          fi
+
+          if [ -z "$BEST" ]; then
+            echo "ERROR: No best func found for dist=${DIST} in results/${PROBLEM}/"
+            echo "Available .py files:"
+            find results/ -name "*.py" -type f
+            exit 1
+          fi
+
+          echo "Found: $BEST"
+          cp "$BEST" problems/${PROBLEM}/func_best.py
+          echo "--- func_best.py (for dist=${DIST}) ---"
+          cat problems/${PROBLEM}/func_best.py
+
+      - name: DOWNLOAD HEATMAPS (TEST)
+        if: github.event.inputs.problem == 'nco_tsp_edge'
+        env:
+          GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+        run: |
+          mkdir -p problems/nco_tsp_edge/heatmaps
+          gh release download heatmaps-v1 \
+            --repo HaiAu2501/BRIDGE \
+            --pattern "tsp_${{ matrix.dist }}_test_${{ matrix.n }}.npy" \
+            --dir problems/nco_tsp_edge/heatmaps
+          ls -lh problems/nco_tsp_edge/heatmaps/
+
+      - name: RUN TEST (dist=${{ matrix.dist }}, n=${{ matrix.n }})
+        working-directory: problems/${{ github.event.inputs.problem }}
+        run: |
+          python test.py \
+            --n ${{ matrix.n }} \
+            --dist ${{ matrix.dist }} \
+            --module func_best.py
