@@ -1,4 +1,4 @@
-name: RUN EXPERIMENT 08
+name: RUN EXPERIMENT 07
 
 on:
   workflow_dispatch:
@@ -11,6 +11,24 @@ on:
         options:
           - nco_tsp_node
           - nco_tsp_edge
+      framework:
+        description: "Framework to use"
+        type: choice
+        required: true
+        default: bb_ea_bot
+        options:
+          - bb_ea_bot
+          - bb_ea_top
+      dist:
+        description: "Distribution to use for search"
+        type: choice
+        required: true
+        default: unif
+        options:
+          - unif
+          - clus
+          - diag
+          - barb
       model:
         description: "LLM model to use"
         type: choice
@@ -22,10 +40,10 @@ on:
 
 jobs:
   # ============================================================
-  # Job 1: Run OMDT search (covers all 4 distributions at once)
+  # Job 1: Checkout private repo → Run AHD experiment
   # ============================================================
   run_experiment:
-    name: RUN | ${{ github.event.inputs.problem }} | omdt_wb_ea
+    name: RUN | ${{ github.event.inputs.problem }} | ${{ github.event.inputs.framework }} | ${{ github.event.inputs.dist }}
     runs-on: ubuntu-latest
 
     steps:
@@ -46,46 +64,45 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # OMDT evaluates on ALL 4 distributions during search,
-      # so we need ALL train heatmaps upfront (edge only).
-      - name: DOWNLOAD HEATMAPS (ALL TRAIN DISTS)
-        if: github.event.inputs.problem == 'nco_tsp_edge'
+      - name: DOWNLOAD HEATMAPS (TRAIN)
         env:
           GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
         run: |
-          mkdir -p problems/nco_tsp_edge/heatmaps
-          for DIST in unif clus diag barb; do
+          if [ "${{ github.event.inputs.problem }}" = "nco_tsp_edge" ]; then
+            mkdir -p problems/nco_tsp_edge/heatmaps
+            DIST=${{ github.event.inputs.dist }}
             gh release download heatmaps-v1 \
               --repo HaiAu2501/BRIDGE \
               --pattern "tsp_${DIST}_train_*.npy" \
               --dir problems/nco_tsp_edge/heatmaps
-          done
-          echo "--- downloaded train heatmaps ---"
-          ls -lh problems/nco_tsp_edge/heatmaps/
+            ls -lh problems/nco_tsp_edge/heatmaps/
+          else
+            echo "Not nco_tsp_edge, skipping heatmap download."
+          fi
 
-      - name: RUN OMDT EXPERIMENT
+      - name: RUN EXPERIMENT
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           python main.py \
             llm.model=${{ github.event.inputs.model }} \
             problem=${{ github.event.inputs.problem }} \
-            framework=omdt_wb_ea
+            framework=${{ github.event.inputs.framework }} \
+            problem.dist_code=${{ github.event.inputs.dist }}
 
       - name: UPLOAD RESULTS
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: results-${{ github.event.inputs.problem }}-omdt-${{ github.run_id }}
+          name: results-${{ github.event.inputs.problem }}-${{ github.event.inputs.framework }}-${{ github.event.inputs.dist }}-${{ github.run_id }}
           path: results/
           retention-days: 30
 
   # ============================================================
-  # Job 2: Evaluate func_best_on_{dist}.py on test sets
-  #         Matrix: n × dist (all 4 dists × 3 sizes = 12 jobs)
+  # Job 2: Evaluate func_best.py on test sets (matrix over sizes)
   # ============================================================
   evaluate:
-    name: EVAL | ${{ matrix.dist }} | n=${{ matrix.n }}
+    name: EVAL | n=${{ matrix.n }}
     needs: run_experiment
     runs-on: ubuntu-latest
 
@@ -93,10 +110,9 @@ jobs:
       fail-fast: false
       matrix:
         n: [100, 200, 500]
-        dist: [unif, clus, diag, barb]
 
     steps:
-      - name: CHECKOUT PRIVATE REPO
+      - name: CHECKOUT PRIVATE REPO (BRIDGE)
         uses: actions/checkout@v4
         with:
           repository: HaiAu2501/BRIDGE
@@ -116,50 +132,41 @@ jobs:
       - name: DOWNLOAD RESULTS
         uses: actions/download-artifact@v4
         with:
-          name: results-${{ github.event.inputs.problem }}-omdt-${{ github.run_id }}
+          name: results-${{ github.event.inputs.problem }}-${{ github.event.inputs.framework }}-${{ github.event.inputs.dist }}-${{ github.run_id }}
           path: results/
 
-      - name: FIND AND COPY func_best_on_${{ matrix.dist }}.py
+      - name: FIND AND COPY func_best.py
         run: |
           PROBLEM=${{ github.event.inputs.problem }}
-          DIST=${{ matrix.dist }}
-
-          # OMDT outputs func_best_on_{dist}.py (best of generalist vs specialist)
-          BEST=$(find results/${PROBLEM}/ -name "func_best_on_${DIST}.py" -type f | head -1)
-
+          BEST=$(find results/${PROBLEM}/ -name "func_best.py" -type f | head -1)
           if [ -z "$BEST" ]; then
-            # Fallback: try the generalist-specific file
-            BEST=$(find results/${PROBLEM}/ -name "func_best_generalist_${DIST}.py" -type f | head -1)
-          fi
-
-          if [ -z "$BEST" ]; then
-            echo "ERROR: No best func found for dist=${DIST} in results/${PROBLEM}/"
-            echo "Available .py files:"
+            echo "ERROR: func_best.py not found in results/${PROBLEM}/"
             find results/ -name "*.py" -type f
             exit 1
           fi
-
           echo "Found: $BEST"
           cp "$BEST" problems/${PROBLEM}/func_best.py
-          echo "--- func_best.py (for dist=${DIST}) ---"
+          echo "--- func_best.py ---"
           cat problems/${PROBLEM}/func_best.py
 
       - name: DOWNLOAD HEATMAPS (TEST)
-        if: github.event.inputs.problem == 'nco_tsp_edge'
         env:
           GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
         run: |
-          mkdir -p problems/nco_tsp_edge/heatmaps
-          gh release download heatmaps-v1 \
-            --repo HaiAu2501/BRIDGE \
-            --pattern "tsp_${{ matrix.dist }}_test_${{ matrix.n }}.npy" \
-            --dir problems/nco_tsp_edge/heatmaps
-          ls -lh problems/nco_tsp_edge/heatmaps/
+          if [ "${{ github.event.inputs.problem }}" = "nco_tsp_edge" ]; then
+            mkdir -p problems/nco_tsp_edge/heatmaps
+            DIST=${{ github.event.inputs.dist }}
+            N=${{ matrix.n }}
+            gh release download heatmaps-v1 \
+              --repo HaiAu2501/BRIDGE \
+              --pattern "tsp_${DIST}_test_${N}.npy" \
+              --dir problems/nco_tsp_edge/heatmaps
+            ls -lh problems/nco_tsp_edge/heatmaps/
+          else
+            echo "Not nco_tsp_edge, skipping heatmap download."
+          fi
 
-      - name: RUN TEST (dist=${{ matrix.dist }}, n=${{ matrix.n }})
+      - name: RUN TEST (n=${{ matrix.n }})
         working-directory: problems/${{ github.event.inputs.problem }}
         run: |
-          python test.py \
-            --n ${{ matrix.n }} \
-            --dist ${{ matrix.dist }} \
-            --module func_best.py
+          python test.py --n ${{ matrix.n }} --dist ${{ github.event.inputs.dist }} --module func_best.py
