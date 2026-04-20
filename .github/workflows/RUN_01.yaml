@@ -1,0 +1,70 @@
+name: RUN EXPERIMENT 01
+
+on:
+  workflow_dispatch:
+    inputs:
+      problem:
+        description: "Problem name (e.g., tsp_const)"
+        type: choice
+        required: true
+        default: const_tsp
+        options:
+          - const_tsp
+          - const_cvrp
+          - const_op
+          - const_qap
+          - const_jssp  
+      framework:
+        description: "Framework to use (e.g., simple_bot, simple_top)"
+        type: choice
+        required: true
+        default: simple_bot
+        options:
+          - simple_bot
+          - simple_top
+      model:
+        description: "LLM model to use (e.g., gpt-4o-mini)"
+        type: choice
+        required: true
+        default: gpt-4o-mini
+        options:
+          - gpt-4o-mini
+          - gpt-5-nano
+
+jobs:
+  run_experiment:
+    name: RUN | ${{ github.event.inputs.problem }} | ${{ github.event.inputs.framework }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: CHECKOUT PRIVATE REPO
+        uses: actions/checkout@v4
+        with:
+          repository: HaiAu2501/BRIDGE
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+
+      - name: SET UP PYTHON
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: INSTALL DEPENDENCIES
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: RUN EXPERIMENT
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python main.py \
+            llm.model=${{ github.event.inputs.model }} \
+            problem=${{ github.event.inputs.problem }} \
+            framework=${{ github.event.inputs.framework }}
+      - name: UPLOAD RESULTS
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ github.event.inputs.problem }}-${{ github.event.inputs.framework }}-${{ github.run_id }}
+          path: results/
+          retention-days: 30
