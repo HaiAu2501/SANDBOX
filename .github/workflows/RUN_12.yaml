@@ -1,0 +1,132 @@
+name: RUN 12
+
+on:
+  workflow_dispatch:
+    inputs:
+      problem:
+        description: "Problem name"
+        type: choice
+        required: true
+        default: sco_const_cts
+        options:
+          - sco_const_cts
+          - sco_const_ftr
+          - sco_const_oas
+          - sco_const_wpf
+      framework:
+        description: "Framework to use"
+        type: choice
+        required: true
+        default: ea_bot
+        options:
+          - ea_bot
+          - ea_top
+          - mcts_bot
+          - mcts_top
+      model:
+        description: "LLM model to use"
+        type: choice
+        required: true
+        default: gpt-4o-mini
+        options:
+          - gpt-4o-mini
+          - gpt-5-nano
+
+jobs:
+  # ============================================================
+  # Job 1: Checkout private repo → Run AHD experiment
+  # ============================================================
+  run_experiment:
+    name: RUN | ${{ github.event.inputs.problem }} | ${{ github.event.inputs.framework }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: CHECKOUT PRIVATE REPO
+        uses: actions/checkout@v4
+        with:
+          repository: HaiAu2501/BRIDGE
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+
+      - name: SET UP PYTHON
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: INSTALL DEPENDENCIES
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: RUN EXPERIMENT
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python main.py \
+            llm.model=${{ github.event.inputs.model }} \
+            problem=${{ github.event.inputs.problem }} \
+            framework=${{ github.event.inputs.framework }}
+
+      - name: UPLOAD RESULTS
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ github.event.inputs.problem }}-${{ github.event.inputs.framework }}-${{ github.run_id }}
+          path: results/
+          retention-days: 30
+
+  # ============================================================
+  # Job 2: Evaluate func_best.py on the test set
+  # ============================================================
+  evaluate:
+    name: EVAL | ${{ github.event.inputs.problem }}
+    needs: run_experiment
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: CHECKOUT PRIVATE REPO (BRIDGE)
+        uses: actions/checkout@v4
+        with:
+          repository: HaiAu2501/BRIDGE
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+
+      - name: SET UP PYTHON
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: INSTALL DEPENDENCIES
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: DOWNLOAD RESULTS
+        uses: actions/download-artifact@v4
+        with:
+          name: results-${{ github.event.inputs.problem }}-${{ github.event.inputs.framework }}-${{ github.run_id }}
+          path: results/
+
+      - name: FIND AND COPY func_best.py
+        run: |
+          PROBLEM=${{ github.event.inputs.problem }}
+          BEST=$(find results/${PROBLEM}/ -name "func_best.py" -type f | head -1)
+          if [ -z "$BEST" ]; then
+            echo "ERROR: func_best.py not found in results/${PROBLEM}/"
+            find results/ -name "*.py" -type f
+            exit 1
+          fi
+          echo "Found: $BEST"
+          cp "$BEST" problems/${PROBLEM}/func_best.py
+          echo "--- func_best.py ---"
+          cat problems/${PROBLEM}/func_best.py
+
+      - name: RUN EVAL
+        working-directory: problems/${{ github.event.inputs.problem }}
+        run: |
+          # Derive test data filename: sco_const_{name} -> {name}_test.npz
+          PROBLEM=${{ github.event.inputs.problem }}
+          NAME=${PROBLEM#sco_const_}
+          DATA="${NAME}_test.npz"
+          echo "Using test data: $DATA"
+          python eval.py --module func_best.py --data ${DATA}
