@@ -17,8 +17,9 @@ on:
         description: "Framework to use"
         type: choice
         required: true
-        default: ea_bot
+        default: dual_ea
         options:
+          - dual_ea
           - ea_bot
           - ea_top
           - mcts_bot
