@@ -1,0 +1,111 @@
+name: RUN 14
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "LLM model to use"
+        type: choice
+        required: true
+        default: gpt-4o-mini
+        options:
+          - gpt-4o-mini
+          - gpt-5-nano
+      problem:
+        description: "Problem to run"
+        type: choice
+        required: true
+        default: sr_stressstrain
+        options:
+          - sr_bactgrow
+          - sr_oscillator1
+          - sr_oscillator2
+          - sr_stressstrain
+      framework:
+        description: "Framework to run"
+        type: choice
+        required: true
+        default: ea_sr_top
+        options:
+          - ea_sr_bot
+          - ea_sr_top
+
+jobs:
+  run_experiment:
+    name: RUN | ${{ github.event.inputs.problem }} | ${{ github.event.inputs.framework }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: CHECK REQUIRED SECRETS
+        env:
+          CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${CHECKOUT_TOKEN}" ]; then
+            echo "CHECKOUT_TOKEN secret is not set."
+            exit 1
+          fi
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "OPENAI_API_KEY secret is not set."
+            exit 1
+          fi
+
+      - name: CHECKOUT PRIVATE REPO
+        uses: actions/checkout@v4
+        with:
+          repository: HaiAu2501/BRIDGE
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+
+      - name: SET UP PYTHON
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: INSTALL DEPENDENCIES
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: RUN EXPERIMENT
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python main.py \
+            llm.model=${{ github.event.inputs.model }} \
+            problem=${{ github.event.inputs.problem }} \
+            framework=${{ github.event.inputs.framework }}
+
+      - name: FIND AND COPY func_best.py
+        run: |
+          PROBLEM=${{ github.event.inputs.problem }}
+          BEST=$(find results/${PROBLEM}/ -name "func_best.py" -type f | head -1)
+          if [ -z "$BEST" ]; then
+            echo "ERROR: func_best.py not found in results/${PROBLEM}/"
+            find results/ -name "*.py" -type f
+            exit 1
+          fi
+          echo "Found: $BEST"
+          cp "$BEST" problems/${PROBLEM}/func_best.py
+          echo "--- func_best.py ---"
+          cat problems/${PROBLEM}/func_best.py
+
+      - name: RUN EVAL test_id
+        working-directory: problems/${{ github.event.inputs.problem }}
+        run: |
+          python eval.py --module func_best.py --split test_id
+
+      - name: RUN EVAL test_ood
+        working-directory: problems/${{ github.event.inputs.problem }}
+        run: |
+          python eval.py --module func_best.py --split test_ood
+
+      - name: UPLOAD RESULTS
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ github.event.inputs.problem }}-${{ github.event.inputs.framework }}-${{ github.run_id }}
+          path: results/
+          retention-days: 30
