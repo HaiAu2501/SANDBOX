@@ -14,10 +14,10 @@ on:
         description: "Framework to use (e.g., simple_bot, simple_top)"
         type: choice
         required: true
-        default: ea_shift_bot
+        default: ea_sparse_bot
         options:
-          - ea_shift_bot
-          - ea_shift_top
+          - ea_sparse_bot
+          - ea_sparse_top
       model:
         description: "LLM model to use (e.g., gpt-4o-mini)"
         type: choice
