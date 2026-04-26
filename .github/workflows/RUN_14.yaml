@@ -25,8 +25,10 @@ on:
         description: "Framework to run"
         type: choice
         required: true
-        default: ea_sr_top
+        default: mcts_sr_bot
         options:
+          - mcts_sr_bot
+          - mcts_sr_top
           - ea_sr_bot
           - ea_sr_top
 
