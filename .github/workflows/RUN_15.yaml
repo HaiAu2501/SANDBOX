@@ -18,6 +18,7 @@ on:
         options:
           - ea_sparse_bot
           - ea_sparse_top
+          - ea_sparse_dual
       model:
         description: "LLM model to use (e.g., gpt-4o-mini)"
         type: choice
