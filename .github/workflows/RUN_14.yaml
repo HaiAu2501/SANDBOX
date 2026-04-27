@@ -25,12 +25,13 @@ on:
         description: "Framework to run"
         type: choice
         required: true
-        default: mcts_sr_bot
+        default: ea_sr_dual
         options:
           - mcts_sr_bot
           - mcts_sr_top
           - ea_sr_bot
           - ea_sr_top
+          - ea_sr_dual
 
 jobs:
   run_experiment:

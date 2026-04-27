@@ -14,8 +14,12 @@ on:
         description: "Framework to use (e.g., simple_bot, simple_top)"
         type: choice
         required: true
-        default: ea_sparse_bot
+        default: mcts_bot
         options:
+          - mcts_bot
+          - mcts_top
+          - ea_bot
+          - ea_top
           - ea_sparse_bot
           - ea_sparse_top
           - ea_sparse_dual
