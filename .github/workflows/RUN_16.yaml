@@ -1,0 +1,187 @@
+name: RUN 16
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "LLM model to use"
+        type: choice
+        required: true
+        default: gpt-4o-mini
+        options:
+          - gpt-4o-mini
+          - gpt-5-nano
+
+jobs:
+  # ================================================================
+  # TRAIN: limited to 2 parallel jobs (LLM rate limit).
+  # Each train job uploads func_best.py + the full results/ folder
+  # so the downstream test job can pick them up.
+  # ================================================================
+  train:
+    name: TRAIN | ${{ matrix.problem }} | ${{ matrix.framework }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        problem:
+          - grasp_p_center
+          - grasp_p_cover
+          - grasp_p_dispersion
+          - grasp_p_median
+        framework:
+          - ea_bot
+          - ea_top
+          - dual_ea
+
+    steps:
+      - name: CHECK REQUIRED SECRETS
+        env:
+          CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${CHECKOUT_TOKEN}" ]; then
+            echo "CHECKOUT_TOKEN secret is not set."
+            exit 1
+          fi
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "OPENAI_API_KEY secret is not set."
+            exit 1
+          fi
+
+      - name: CHECKOUT PRIVATE REPO
+        uses: actions/checkout@v4
+        with:
+          repository: HaiAu2501/BRIDGE
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+
+      - name: SET UP PYTHON
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: INSTALL DEPENDENCIES
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: RUN EXPERIMENT (TRAIN)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python main.py \
+            llm.model=${{ github.event.inputs.model }} \
+            problem=${{ matrix.problem }} \
+            framework=${{ matrix.framework }}
+
+      - name: FIND func_best.py
+        run: |
+          PROBLEM=${{ matrix.problem }}
+          BEST=$(find results/${PROBLEM}/ -name "func_best.py" -type f | head -1)
+          if [ -z "$BEST" ]; then
+            echo "ERROR: func_best.py not found in results/${PROBLEM}/"
+            find results/ -name "*.py" -type f
+            exit 1
+          fi
+          echo "Found: $BEST"
+          mkdir -p staging
+          cp "$BEST" staging/func_best.py
+          echo "--- func_best.py ---"
+          cat staging/func_best.py
+
+      - name: UPLOAD func_best.py FOR TEST
+        uses: actions/upload-artifact@v4
+        with:
+          name: func-best-${{ matrix.problem }}-${{ matrix.framework }}
+          path: staging/func_best.py
+          retention-days: 1
+
+      - name: UPLOAD TRAIN RESULTS
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.problem }}-${{ matrix.framework }}-${{ github.run_id }}
+          path: results/
+          retention-days: 30
+
+  # ================================================================
+  # TEST: no LLM calls, runs fully in parallel (all 12 jobs).
+  # Starts after the train job family completes; each test job then
+  # downloads its matching func_best.py artifact and runs eval on
+  # all 3 test sizes (100, 200, 500).
+  # ================================================================
+  test:
+    name: TEST | ${{ matrix.problem }} | ${{ matrix.framework }}
+    needs: train
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        problem:
+          - grasp_p_center
+          - grasp_p_cover
+          - grasp_p_dispersion
+          - grasp_p_median
+        framework:
+          - ea_bot
+          - ea_top
+          - dual_ea
+
+    steps:
+      - name: CHECKOUT PRIVATE REPO
+        uses: actions/checkout@v4
+        with:
+          repository: HaiAu2501/BRIDGE
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+
+      - name: SET UP PYTHON
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: INSTALL DEPENDENCIES
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: DOWNLOAD func_best.py
+        uses: actions/download-artifact@v4
+        with:
+          name: func-best-${{ matrix.problem }}-${{ matrix.framework }}
+          path: problems/${{ matrix.problem }}/
+
+      - name: VERIFY func_best.py
+        run: |
+          ls -la problems/${{ matrix.problem }}/func_best.py
+          echo "--- func_best.py ---"
+          cat problems/${{ matrix.problem }}/func_best.py
+
+      - name: DERIVE TEST DATA PREFIX
+        id: prefix
+        run: |
+          PROBLEM=${{ matrix.problem }}
+          DATA_PREFIX=${PROBLEM#grasp_}
+          echo "data_prefix=${DATA_PREFIX}" >> $GITHUB_OUTPUT
+          echo "Data prefix: ${DATA_PREFIX}"
+
+      - name: RUN EVAL test_100
+        working-directory: problems/${{ matrix.problem }}
+        run: |
+          python eval.py --module func_best.py --data ${{ steps.prefix.outputs.data_prefix }}_test_100.npz
+
+      - name: RUN EVAL test_200
+        working-directory: problems/${{ matrix.problem }}
+        run: |
+          python eval.py --module func_best.py --data ${{ steps.prefix.outputs.data_prefix }}_test_200.npz
+
+      - name: RUN EVAL test_500
+        working-directory: problems/${{ matrix.problem }}
+        run: |
+          python eval.py --module func_best.py --data ${{ steps.prefix.outputs.data_prefix }}_test_500.npz
