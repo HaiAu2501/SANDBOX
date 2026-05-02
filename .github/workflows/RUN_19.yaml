@@ -1,0 +1,89 @@
+name: RUN 19
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "LLM model"
+        type: choice
+        required: true
+        default: gpt-4o-mini
+        options:
+          - gpt-4o-mini
+          - gpt-5-nano
+
+jobs:
+  run_experiment:
+    name: "${{ matrix.problem }} | ${{ matrix.framework }}"
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 2
+      fail-fast: false
+      matrix:
+        problem:
+          - psd_amylase
+          - psd_ired
+          - psd_rhodopsin
+          - psd_hydro
+        framework:
+          - ea_psd_bot
+          - ea_psd_top
+          - ea_psd_dual
+          - mcts_psd_bot
+          - mcts_psd_top
+
+    steps:
+      - name: CHECKOUT PRIVATE REPO
+        uses: actions/checkout@v4
+        with:
+          repository: HaiAu2501/BRIDGE
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+
+      - name: SET UP PYTHON
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: INSTALL DEPENDENCIES
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: RUN EXPERIMENT (train)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python main.py \
+            llm.model=${{ github.event.inputs.model }} \
+            problem=${{ matrix.problem }} \
+            framework=${{ matrix.framework }}
+
+      - name: PRINT func_best
+        run: |
+          BEST=$(find results/${{ matrix.problem }} -name "func_best.py" | sort | tail -n 1)
+          if [ -z "$BEST" ]; then
+            echo "::warning::func_best.py not found for ${{ matrix.problem }} / ${{ matrix.framework }}"
+            exit 0
+          fi
+          echo "=== func_best.py: $BEST ==="
+          cat "$BEST"
+
+      - name: RUN TEST (split=test)
+        run: |
+          BEST=$(find results/${{ matrix.problem }} -name "func_best.py" | sort | tail -n 1)
+          if [ -z "$BEST" ]; then
+            echo "::warning::Skipping test — func_best.py not found"
+            exit 0
+          fi
+          cp "$BEST" problems/${{ matrix.problem }}/func_best.py
+          echo "=== TEST SCORE (${{ matrix.problem }} / ${{ matrix.framework }}) ==="
+          python problems/${{ matrix.problem }}/eval.py --module func_best.py --split test
+
+      - name: UPLOAD RESULTS
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.problem }}-${{ matrix.framework }}-${{ github.run_id }}
+          path: results/
+          retention-days: 30
